@@ -73,7 +73,7 @@ func main() {
 	}
 
 	// Webhook Inspector WebSocket URL
-	webhookInspectorWS := "ws://webhookinspector.com/ws"
+	webhookInspectorWS := "ws://ws.webhookinspector.com/ws"
 
 	// Connect to WebSocket
 	fmt.Println("Connecting to WebSocket from Webhook Inspector...")
