@@ -4,7 +4,7 @@ platforms=("windows/amd64" "windows/386" "linux/amd64" "linux/386" "linux/arm" "
 for platform in "${platforms[@]}"; do
     OS=$(echo $platform | cut -d'/' -f1)
     ARCH=$(echo $platform | cut -d'/' -f2)
-    output_name="app-${OS}-${ARCH}"
+    output_name="webhookinspector-${OS}-${ARCH}"
     
     if [ "$OS" == "windows" ]; then
         output_name+=".exe"
