@@ -13,6 +13,8 @@ import (
 	"strings"
 	"syscall"
 
+	"time"
+
 	"github.com/gorilla/websocket"
 )
 
@@ -75,49 +77,92 @@ func main() {
 	// Webhook Inspector WebSocket URL
 	webhookInspectorWS := "ws://ws.webhookinspector.com/ws"
 
-	// Connect to WebSocket
-	fmt.Println("Connecting to WebSocket from Webhook Inspector...")
-	conn, _, err := websocket.DefaultDialer.Dial(webhookInspectorWS, nil)
-	if err != nil {
-		log.Fatal("Error connecting to WebSocket:", err)
-	}
-	defer conn.Close()
-	fmt.Println("Connected! Listening for events...")
+	// Canal para controlar a reconexão
+	done := make(chan struct{})
 
 	// Capture termination signals (Ctrl+C)
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
 
-	// Loop to listen for WebSocket messages
+	// Create a separate goroutine for connection management
 	go func() {
 		for {
-			_, message, err := conn.ReadMessage()
-			if err != nil {
-				fmt.Println("Error reading message:", err)
-				break
-			}
+			connectAndListen(webhookInspectorWS, &config, done)
 
-			var payload WebhookPayload
-			if err := json.Unmarshal(message, &payload); err != nil {
-				fmt.Println("Error decoding JSON:", err)
-				continue
+			select {
+			case <-done:
+				return
+			default:
+				fmt.Println("Connection lost. Reconnecting in 5 seconds...")
+				time.Sleep(5 * time.Second)
 			}
-
-			// Filter only requests with the corresponding id
-			if payload.ID != config.InspectorID {
-				fmt.Println("Webhook received with different id. Ignoring.")
-				continue
-			}
-
-			// Forward the request to the local endpoint, incorporating query params
-			fmt.Println("Forwarding webhook to:", config.LocalEndpoint)
-			forwardWebhook(config.LocalEndpoint, payload)
 		}
 	}()
 
-	// Wait until the user presses Ctrl+C
+	// Wait for interrupt signal
 	<-interrupt
-	fmt.Println("\nClosing connection...")
+	fmt.Println("\nReceived interrupt signal. Closing...")
+	close(done)
+	// Give some time for graceful shutdown
+	time.Sleep(1 * time.Second)
+	os.Exit(0)
+}
+
+func connectAndListen(webhookInspectorWS string, config *Config, done chan struct{}) {
+	conn, _, err := websocket.DefaultDialer.Dial(webhookInspectorWS, nil)
+	if err != nil {
+		log.Println("Error connecting to WebSocket:", err)
+		return
+	}
+	defer conn.Close()
+	fmt.Println("Connected! Listening for events...")
+
+	// Configurar ping/pong
+	conn.SetPingHandler(func(string) error {
+		return conn.WriteControl(websocket.PongMessage, []byte{}, time.Now().Add(10*time.Second))
+	})
+
+	// Enviar ping periodicamente
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				if err := conn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(10*time.Second)); err != nil {
+					return
+				}
+			case <-done:
+				return
+			}
+		}
+	}()
+
+	// Loop para ler mensagens
+	for {
+		_, message, err := conn.ReadMessage()
+		if err != nil {
+			fmt.Println("Error reading message:", err)
+			return
+		}
+
+		var payload WebhookPayload
+		if err := json.Unmarshal(message, &payload); err != nil {
+			fmt.Println("Error decoding JSON:", err)
+			continue
+		}
+
+		// Filter only requests with the corresponding id
+		if payload.ID != config.InspectorID {
+			fmt.Println("Webhook received with different id. Ignoring.")
+			continue
+		}
+
+		// Forward the request to the local endpoint
+		fmt.Println("Forwarding webhook to:", config.LocalEndpoint)
+		forwardWebhook(config.LocalEndpoint, payload)
+	}
 }
 
 // forwardWebhook forwards the webhook to the local endpoint,
